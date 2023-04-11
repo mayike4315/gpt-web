@@ -1,0 +1,28 @@
+<template>
+  <ChatWindow msg="Welcome to ChatWindow"/>
+</template>
+
+<script>
+import ChatWindow from './components/ChatWindow.vue'
+
+export default {
+  name: 'App',
+  components: {
+    ChatWindow
+  }
+}
+</script>
+
+<style >
+#app {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-align: left;
+  color: #2c3e50;
+  margin-top: 10px;
+}
+html {
+  background-color: #444654;
+}
+</style>
