@@ -29,7 +29,7 @@
     <div v-if="!loading" class="loading">
       <a  @click="regenerateHanldChange">Regenerate response</a>
     </div>
-    
+
   </div>
 </template>
 
@@ -103,7 +103,7 @@ export default {
       const self = this;
       this.currentReceiveMsg.content = ''
       let content = ''
-      const eventSource = new EventSourcePolyfill('http://192.168.203.68:8000/chat?message=' + this.inputMessage, {
+      const eventSource = new EventSourcePolyfill(process.env.VUE_APP_API_BASE_URL+'chat?message=' + this.inputMessage, {
         headers: {
           'uid': this.uid
         }
@@ -118,11 +118,7 @@ export default {
         self.currentReceiveMsg.time=new Date().toLocaleString()
         this.messages.push(this.currentReceiveMsg);
       })
-      eventSource.addEventListener("error", err => {
-        if(err.type  == 'error'){ //错误关闭掉
-          eventSource.close()
-        }
-      })
+
       eventSource.addEventListener('message', event => {
         //结束
         if(!self.flag){
@@ -137,6 +133,7 @@ export default {
           if (eventSource) {
             eventSource.close();
           }
+          localStorage.setItem("messages",JSON.stringify(this.messages))
           return;
         }
         const message = JSON.parse(event.data)
@@ -149,6 +146,13 @@ export default {
         const messageContainer = this.$refs.messageContainer;
         messageContainer.scrollTop = messageContainer.scrollHeight;
       })
+
+      eventSource.addEventListener("error", err => {
+        if(err.type  === 'error'){ //错误关闭掉
+          eventSource.close()
+        }
+      })
+
     },
     copy() {
         const markdownDivs = document.querySelectorAll('.hljs');
@@ -186,7 +190,7 @@ export default {
     stopHanldChange(){
       this.flag = false
       this.loading = false;
-      axios.post('http://192.168.203.68:8000/stop').then(function (response) {
+      axios.post(process.env.VUE_APP_API_BASE_URL+'/stop').then(function (response) {
         console.log(response);
       })
       .catch(function (error) {
@@ -197,11 +201,18 @@ export default {
     regenerateHanldChange(){
       this.inputMessage = '继续'
       this.sendMessage()
-    } 
+    }
   },
   mounted() {
     this.uid = Math.random().toString(36).substring(7);
-    this.messages.push({"content": '欢迎使用GPT-WEB，点击下方输入框输入问题可实现与AI连续对话！！！', "id": this.uid, time: new Date().toLocaleString()})
+    if (this.messages.length === 0){
+      this.messages.push({"content": '欢迎使用GPT-WEB，点击下方输入框输入问题可实现与AI连续对话！！！', "id": this.uid, time: new Date().toLocaleString()})
+    }
+  },
+  created(){
+    if (localStorage.getItem("messages")){
+      this.messages=JSON.parse(localStorage.getItem("messages"))
+    }
   }
 }
 </script>
