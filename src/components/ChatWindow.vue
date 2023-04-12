@@ -19,15 +19,20 @@
           </div>
       </div>
     </div>
-    <div class="chat-input">
-      <textarea v-model="inputMessage" @keydown.enter.prevent="sendMessage"></textarea>
-      <button @click="sendMessage" :disabled="loading"  :class="{'buttonSend': buttonSend, 'buttonReceived': buttonReceived}" >发送</button>
-    </div>
+
     <div v-if="loading" class="loading">
       <a @click="stopHanldChange">Stop generating</a>
     </div>
     <div v-if="!loading" class="loading">
       <a  @click="regenerateHanldChange">Regenerate response</a>
+    </div>
+
+    <div class="chat-input">
+      <textarea v-model="inputMessage" @keydown.enter.prevent="sendMessage"></textarea>
+      <button @click="sendMessage" :disabled="loading"  :class="{'buttonSend': buttonSend, 'buttonReceived': buttonReceived}" >
+        <img src="@/assets/send.png" v-if="buttonSend"/>
+        <img src="@/assets/received.png" v-if="!buttonSend" alt="" />
+      </button>
     </div>
 
   </div>
@@ -75,7 +80,7 @@ export default {
       currentReceiveMsg: {id: this.uid, content: ''},
       uid: '',
       sendAvatar:defaultAvatar,
-      receiveAvatar:chatAvatar
+      receiveAvatar:chatAvatar,
     }
   },
   methods: {
@@ -203,7 +208,7 @@ export default {
       this.sendMessage()
     }
   },
-  mounted() {
+  mounted(){
     this.uid = Math.random().toString(36).substring(7);
     if (this.messages.length === 0){
       this.messages.push({"content": '欢迎使用GPT-WEB，点击下方输入框输入问题可实现与AI连续对话！！！', "id": this.uid, time: new Date().toLocaleString()})
@@ -257,10 +262,10 @@ export default {
         justify-content: flex-end;
         padding: 16px;
         overflow: auto;
-        font-size: 85%;
         line-height: 1.45;
         border-radius: 6px;
         width: 50%;
+        font-size: 16px;
     }
   }
 }
@@ -281,8 +286,13 @@ export default {
   display: flex;
   align-items: center;
   padding: 10px;
-  border-top: 1px solid #ccc;
   justify-content: flex-end;
+  img{
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+  }
 }
 
 .chat-input textarea {
@@ -297,7 +307,7 @@ export default {
 }
 
 .chat-input button {
-  background-color: #007bff;
+  background-color: #444654;
   color: #fff;
   border: none;
   border-radius: 5px;
@@ -306,13 +316,13 @@ export default {
 }
 .chat-input {
   .buttonSend{
-    background-color: #007bff;
+    background-color:#444654;
   }
 }
 
 .chat-input {
   .buttonReceived{
-    background-color: #373839;
+    background-color: #444654;
   }
 }
 .imgLeft{
@@ -346,10 +356,11 @@ export default {
 }
 
 .loading{
-  position: fixed;
-  bottom: 140px;
-  text-align: center;
-  width: 100%;
+  display: flex;
+  justify-content: center; /* 水平居中 */
+  align-items: center; /* 垂直居中 */
+  padding: 20px;
+  border-top: 1px solid #ccc;
   a{
     cursor: pointer;
     color: #fff;
