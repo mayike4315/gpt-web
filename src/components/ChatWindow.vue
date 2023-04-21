@@ -1,17 +1,24 @@
 <template>
   <div class="chat-container">
     <div class="chat-header">{{ title }}
-      <button @click="saveAsMarkdownFile">导出</button>
+      <button @click="saveAsMarkdownFile" class="left">
+        <img src="@/assets/export.png"/>
+      </button>
+      <button @click="restore" class="right">
+        <img src="@/assets/restore.png"/>
+      </button>
     </div>
-    <div class="chat-message" ref="messageContainer">
-      <div v-for="message in messages" :key="message.id"
+    <div class="chat-message" ref="messagesContainer">
+      <div v-for="(message,index) in messages" :key="message.id"
            :class="{ 'sent-message': message.sent, 'received-message': !message.sent }">
 
         <div class="imgLeft" v-if="!message.sent">
           <img class="img" :src="receiveAvatar"/>
           <span class="time">{{ message.time }}</span>
+          <img class="del" v-if="index !== 0" src="@/assets/del.png" @click="deleteDataByKey(message.key)"/>
         </div>
         <div class="imgRight" v-if="message.sent">
+          <img class="del" src="@/assets/del.png" @click="deleteDataByKey(message.key)"/>
           <span class="time">{{ message.time }}</span>
           <img class="img" :src="sendAvatar"/>
         </div>
@@ -29,7 +36,7 @@
       </div>
     </div>
     <div class="chat-input">
-      <textarea v-model="inputMessage" @keydown.enter.prevent="sendMessage"
+      <textarea  v-model="inputMessage" @keydown.enter.prevent="sendMessage"
                 placeholder="Type your message, Ctrl+Enter enables multiple lines of input"></textarea>
       <button @click="sendMessage" :disabled="isGenerating"
               :class="buttonSend ? 'buttonSend' : 'buttonReceived'">
@@ -38,7 +45,10 @@
       </button>
     </div>
     <!-- 弹窗 -->
-    <propBox :message="message" :show="show"></propBox>
+    <AlertModal ref="alertModal" :duration="1000" :hasButtons="hasButtons"/>
+
+
+
 
   </div>
 </template>
@@ -53,7 +63,8 @@ import chatAvatar from '@/assets/pwa-192x192.png'
 import ClipboardJS from 'clipboard'; //复制粘贴
 import {saveAs} from 'file-saver';
 import Api from '@/api'
-import propBox from "@/components/PropBox";
+import AlertModal from "@/components/AlertModal";
+import { openDatabase, addNewMessage, getAllMessages,delMessage } from '@/api/db';
 
 
 const md = new MarkdownIt({
@@ -75,7 +86,7 @@ const md = new MarkdownIt({
 })
 
 export default {
-  components: {propBox},
+  components: {AlertModal},
   data() {
     return {
       show: false,
@@ -86,12 +97,13 @@ export default {
       title: 'GPT在线',
       messages: [],
       inputMessage: '',
-      currentReceiveMsg: {id: this.uid, content: ''},
+      currentReceiveMsg: {uid: this.uid, content: ''},
       uid: '',
       sendAvatar: defaultAvatar,
       receiveAvatar: chatAvatar,
       eventSource: null,
-      isThinking: false
+      isThinking: false,
+      hasButtons:false
     }
   },
   methods: {
@@ -105,21 +117,20 @@ export default {
       textarea.selectionStart = textarea.selectionEnd = start + 1
       this.content = textarea.value
     },
-    //弹窗提示
-    promptMessage(info) {
-      this.show = true
-      this.message = info
-      //3秒自动消失提示
-      if (this.show) {
-        setTimeout(() => {
-          this.show = false
-        }, 3000)
-      }
+     // 创建消息对象
+    createMessageObj(content, sent = true) {
+      const message = {
+        content,
+        uid: this.uid,
+        time: new Date().toLocaleString(),
+        sent
+      };
+      return message;
     },
     //发送消息逻辑
     sendMessage(event) {
       if (!this.inputMessage) {
-        this.promptMessage()
+        this.showConfirmDialog("发送内容不能为空")
         return
       }
       //ctrl+enter换行不提交
@@ -130,27 +141,18 @@ export default {
       if (this.isGenerating) {
         return
       }
-      //处理历史消息
-      if (this.currentReceiveMsg.content) {
-        let historyMsg = {...this.currentReceiveMsg}
-        this.messages.splice(-1, 1)
-        this.messages.push(historyMsg)
-      }
+
       this.isStop = false
       this.isThinking = true
+
       //检查sse状态
       this.checkEventState()
-      this.messages.push({
-        "content": this.inputMessage,
-        "id": this.uid,
-        'time': new Date().toLocaleString(),
-        'sent': true
-      })
+      const message = this.createMessageObj(this.inputMessage, true);
+      this.messages.push(message)
+      this.addMessage(message);
       // 向服务端发送消息
       this.chat()
-      setTimeout(() => {
-        this.scrollTop()
-      }, 1000)
+      this.scrollTop();
     },
     //sse连接
     connectSse() {
@@ -159,45 +161,50 @@ export default {
         headers: {
           'uid': this.uid
         },
-        heartbeatTimeout: 120000, // 设置超时时间
+        heartbeatTimeout: 360000, // 设置超时时间
       })
     },
     //sse事件监听方法，只初始化一次（sse自动重新连接时，之前添加的addEventListener监听方法会自动重新绑定到新的sse对象上）
     listenForSse() {
       console.log("addEventListener……")
       const self = this;
-      this.currentReceiveMsg.content = ''
       let content = ''
+
       //和后台连接成功
-      this.eventSource.addEventListener("open", event => {
+      this.eventSource.addEventListener("open", (event) => {
         console.log('open successfully', event)
       })
 
       //自定义监听事件，和openai成功建立连接时触发
-      this.eventSource.addEventListener("data", event => {
+      this.eventSource.addEventListener("data",  async (event) => {
         console.log('OpenAI建立sse连接 successfully', event)
-        this.buttonSend = false,
+        this.buttonSend = false
         this.isGenerating = true
         this.isThinking = false
-        this.currentReceiveMsg.id = 'chatGpt'
-        this.currentReceiveMsg.time = new Date().toLocaleString()
-        //新增一条收件消息 记录
-        this.messages.push(this.currentReceiveMsg);
+        this.currentReceiveMsg = {
+          uid: 'chatGpt',
+          time: new Date().toLocaleString(),
+          content: ''
+        }
+        this.messages.push(Object.assign({}, this.currentReceiveMsg)) // 新增一条聊天记录
       })
 
-      this.eventSource.addEventListener('message', event => {
+      this.eventSource.addEventListener('message',  async (event) => {
         //停止输出
         if (self.isStop) {
-          localStorage.setItem("msg" + this.uid, JSON.stringify(this.messages))
+          if (!this.currentReceiveMsg.content) return;
+          // 保存到数据库
+          await this.addMessage(this.currentReceiveMsg);
           return
         }
         if (event.data === "[DONE]") { //文字结束
           self.isGenerating = false
           self.buttonSend = true,
-              this.copy()
+          this.copy()
           content = ''
           console.log("msg接收完毕")
-          localStorage.setItem("msg" + this.uid, JSON.stringify(this.messages))
+          // 保存到数据库
+          await this.addMessage(this.currentReceiveMsg);
           return;
         }
         const message = JSON.parse(event.data)
@@ -205,16 +212,29 @@ export default {
           content = '';
           return;
         }
-        content = content + message.content
-        this.currentReceiveMsg.content = md.render(content)
+        content = `${content}${message.content}`; // 将收到的新消息拼接起来
+        const renderText = md.render(content); // 将拼接后的消息渲染成 Markdown 格式
+        const lastMsgIndex = this.messages.length - 1;
+        this.messages[lastMsgIndex].content = renderText; // 添加到最后一条聊天记录中
+        this.currentReceiveMsg.content = renderText; // 拼接消息内容
+
         this.scrollTop();
       })
 
-      this.eventSource.addEventListener("error", err => {
-        console.log("err", err.error)
+      this.eventSource.addEventListener("error", (err) => {
+        console.log("err", err)
+        if (err.error && err.error.message.indexOf('activity')>0){
+          this.close();
+        }else {
+          this.showConfirmDialog("网络异常请稍后再试")
+        }
         console.log('errReadyState:', this.eventSource.readyState);
+        this.eventSource.close()
+        this.isThinking=false
+        console.log('errReadyState1:', this.eventSource.readyState);
       })
     },
+    //检查sse状态
     checkEventState() {
       if (this.eventSource.readyState === EventSource.CONNECTING) {
         console.log("event  connecting ……,current state", this.eventSource.readyState)
@@ -223,11 +243,13 @@ export default {
       } else if (this.eventSource.readyState === EventSource.CLOSED) {
         console.log("event is closed,start connect ……,current state", this.eventSource.readyState)
         this.close()
-        this.connectSse()
         setTimeout(() => {
-        }, 1000)
+          this.connectSse();
+          this.listenForSse()
+        }, 2000)
       }
     },
+    //复制方法
     copy() {
       const markdownDivs = document.querySelectorAll('.hljs');
       markdownDivs.forEach(function (div) {
@@ -275,6 +297,7 @@ export default {
       this.isGenerating = true;
       this.sendMessage()
     },
+    //唯一uid
     getUid() {
       let uid = window.localStorage.getItem("uid");
       if (uid == null || uid === '' || uid === 'null') {
@@ -284,58 +307,142 @@ export default {
         this.uid = uid;
       }
     },
+    //滚动到最低端
     scrollTop() {
-      const messageContainer = this.$refs.messageContainer;
-      messageContainer.scrollTop = messageContainer.scrollHeight;
+      this.$nextTick(() => {
+        const container = this.$refs.messagesContainer
+        if (container) {
+          container.scrollTop = container.scrollHeight
+        }
+      })
     },
+    //发送消息
     chat() {
       Api.chat({msg: this.inputMessage}).then(response => {
         console.log(response.data)
         // 发送成功后清空输入框
         this.inputMessage = ''
-      })
+      }).catch((error) => {
+        console.log('服务端断开连接，开始尝试重连',error);
+        // this.promptMessage("服务端断开连接，开始尝试重连")
+        this.showConfirmDialog("服务端断开连接，开始尝试重连")
+        this.currentReceiveMsg.content=''
+        this.eventSource.close();
+        setTimeout(() => {
+          this.connectSse();
+          this.listenForSse()
+        }, 1000)
+        this.isThinking=false
+      });
     },
+    //关闭后台链接
     close() {
       Api.close().then(function (response) {
         console.log(response);
       })
     },
-    //刷新页面时关闭后台连接
+    //页面即将被卸载时被调用
     handleBeforeUnload() {
       this.close()
     },
     //导出markdown文件
-    saveAsMarkdownFile() {
-      const jsoMsg = JSON.parse(localStorage.getItem("msg" + this.uid));
-      if (jsoMsg.length === 0) {
-        this.promptMessage("还没有生成数据，请稍后再试")
+    async saveAsMarkdownFile() {
+      // const jsoMsg = JSON.parse(localStorage.getItem("msg" + this.uid));
+      const result = await getAllMessages();
+      if (result == null) {
+        // this.promptMessage("还没有生成数据，请稍后再试")
+        await this.showConfirmDialog("还没有生成数据，请稍后再试")
         return
       }
       // 使用模板字符串构建Markdown文本
-      const mdText = `# 用户:` + this.uid + `\n\n` + jsoMsg.map(item => `##   ${item.time}\n${item.content}\n\n`).join('');
+      const mdText = `# 用户:` + this.uid + `\n\n` + result.map(item => `##   ${item.time}\n${item.content}\n\n`).join('');
       const blob = new Blob([mdText], {type: 'text/markdown;charset=utf-8'});
       saveAs(blob, 'chatFile-' + this.uid + '.md');
-    }
+    },
+    async getMessages() {
+        const messages = await getAllMessages();
+        this.messages = messages;
+        if (this.messages.length === 0) {
+          const message = this.createMessageObj('欢迎使用GPT-WEB，点击下方输入框输入问题可实现与AI连续对话！！！', false);
+          this.messages.push(message)
+          await this.addMessage(message)
+        }
+    },
+
+    async addMessage(messages) {
+      //新增数据并且返回主键key
+      let key = await addNewMessage(messages);
+      messages.key = key
+    },
+    //恢复历史记录
+    async restore() {
+      try {
+        this.hasButtons=true
+        await this.showConfirmDialog(
+            '此功能只针对旧版对话记录做数据恢复，切记只需点击恢复一次即可，切勿重复使用, 如需使用请点击确定！！！',
+            () => {
+              console.log('数据恢复');
+              const jsoMsg = JSON.parse(localStorage.getItem("msg" + this.uid));
+              jsoMsg.forEach(e => {
+                e.uid = e.id
+                this.addMessage(e)
+              })
+              this.getMessages() //刷新数据
+              this.hasButtons=false
+              this.showConfirmDialog("数据恢复完成")
+              //滚动到最低端
+              this.scrollTop();
+            }
+        );
+      } catch (err) {
+        this.hasButtons=false
+        console.log('取消操作');
+      }
+    },
+    //删除某一条记录
+    async deleteDataByKey(key) {
+      await delMessage(key);
+      await this.getMessages() //刷新数据
+    },
+    //提示弹框
+    async showConfirmDialog(msg,confirm) {
+      if (!this.hasButtons) { // 如果没有按钮，直接弹出提示信息
+        this.$refs.alertModal.emitter.emit('open', { message: msg });
+        return;
+      }
+      return new Promise((resolve, reject) => {
+        const confirmListener = () => {
+          confirm(); // 执行删除等操作
+          resolve();
+        };
+        const cancelListener = () => {
+          reject(); // 中断操作
+        };
+
+        this.$refs.alertModal.emitter.on('confirm', confirmListener);
+        this.$refs.alertModal.emitter.on('cancel', cancelListener);
+
+        this.$refs.alertModal.emitter.emit('open', { message: msg,hasButtons:true});
+      });
+    },
   },
-  mounted() {
+  async mounted() {
     window.addEventListener('beforeunload', this.handleBeforeUnload);
-    if (this.messages.length === 0) {
-      this.messages.push({
-        "content": '欢迎使用GPT-WEB，点击下方输入框输入问题可实现与AI连续对话！！！',
-        "id": this.uid,
-        time: new Date().toLocaleString()
-      })
-    }
-    this.scrollTop();
+    //获取历史记录数据
+    await this.getMessages()
+    //添加监听事件
     this.listenForSse()
+    //滚动到最低端
+    this.scrollTop();
   },
-  created() {
+  async created() {
+    //获取到用户id 模拟登陆
     this.getUid();
-    if (localStorage.getItem("msg" + this.uid)) {
-      this.messages = JSON.parse(localStorage.getItem("msg" + this.uid))
-    }
+    //发送sse请求链接
     this.connectSse()
-  }
+    // 初始化数据库
+    await openDatabase();
+  },
 }
 </script>
 
@@ -349,7 +456,7 @@ export default {
 }
 
 .chat-header {
-  padding: 1% 0;
+  padding: 5px 0 10px;
   text-align: center;
   font-size: 20px;
   font-weight: bold;
@@ -358,15 +465,22 @@ export default {
 
   button {
     position: absolute;
-    right: 20px;
     bottom: 20%;
     cursor: pointer;
-    background-color: #696a7d;
-    color: #fff;
+    background-color: #444654;
     border: none;
     border-radius: 5px;
-    padding: 5px 10px;
 
+  }
+  .left{
+    left: 1%;
+  }
+  .right{
+    right: 1%;
+  }
+  img{
+    width: 25px;
+    height:25px;
   }
 }
 
@@ -384,7 +498,7 @@ export default {
   color: #fff;
   padding: 10px;
   border-radius: 10px;
-
+  white-space: pre-wrap;
   .content {
     display: flex;
     align-items: center;
@@ -401,6 +515,9 @@ export default {
       font-size: 16px;
     }
   }
+}
+.markdown-body {
+      max-width: 100%;
 }
 
 .received-message {
@@ -474,9 +591,13 @@ export default {
     height: 40px;
     border-radius: 50%;
   }
+  .del{
+    width: 25px;
+    height: 25px;
+  }
 
   .time {
-    padding-left: 10px;
+    padding: 0 10px;
   }
 }
 
@@ -491,6 +612,12 @@ export default {
     height: 40px;
     border-radius: 50%;
     margin-left: 10px;
+  }
+
+  .del{
+    width: 25px;
+    height: 25px;
+    margin-right: 10px;
   }
 
   .time {
